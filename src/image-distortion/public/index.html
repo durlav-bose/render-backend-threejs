@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Three.js with Puppeteer</title>
+    <style>
+      * {
+        padding: 0;
+        margin: 0;
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      button {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="capture">Capture Image</button>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="./scripts/three.js"></script>
+    <script>
+
+        let backgroundLoader = new THREE.TextureLoader();
+      let maskLoader = new THREE.TextureLoader();
+      let imageMesh, imageGeometry, imageMaterial;
+      let shaderMesh, shaderMaterial, shaderGeometry;
+      let previousPosition = 0.0;
+      let controlPoints = [];
+      let controlPointMeshes = [];
+      let scene, camera, renderer;
+      let borderLine;
+      let curveTop, curveBottom;
+      let backgroundImageSource = "https://cdn.pengine.dev/products/templates/renders/Background-1--xC07VHSavwduU3rN.png";
+      let designImageSource = "https://cdn.pengine.dev/products/render-mockups/xxx-wRKvjnBB5iJJ2JVV.png";
+      let designMaskImageSource = "https://cdn.pengine.dev/products/templates/renders/Print-Mask-uc3PY183mJ8SiTBU.png";
+
+      const vertices = [];
+      const uvs = [];
+      const indices = [];
+
+      let curveTopPoints = [];
+      let curveBottomPoints = [];
+
+      scene = new THREE.Scene();
+
+      const aspectRatio = 1;
+      const cameraHeight = 700; // This controls the zoom level
+      const halfCameraHeight = cameraHeight / 2;
+      const halfCameraWidth = halfCameraHeight * aspectRatio;
+
+      camera = new THREE.OrthographicCamera(
+        -halfCameraWidth, // left
+        halfCameraWidth, // right
+        halfCameraHeight, // top
+        -halfCameraHeight, // bottom
+        -1000, // near plane
+        1000 // far plane
+      );
+
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true,
+      });
+      renderer.setSize(700, 700);
+      document.body.appendChild(renderer.domElement);
+
+      const loadBackgroundImage = async () => {
+        backgroundLoader.load(backgroundImageSource, function (texture) {
+          let width = camera.right - camera.left;
+          let height = camera.top - camera.bottom;
+
+          const planeWidth = width || 1000;
+          const planeHeight = height || 1000;
+
+          imageGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+          imageMaterial = new THREE.MeshBasicMaterial({ map: texture });
+          imageMesh = new THREE.Mesh(imageGeometry, imageMaterial);
+          imageMesh.position.set(0, 0, 0); // Position it as needed
+          scene.add(imageMesh);
+        });
+      };
+
+      const loadMaskImage = async () => {
+        maskLoader.load(designMaskImageSource, function (texture) {
+          let width = camera.right - camera.left;
+          let height = camera.top - camera.bottom;
+
+          const planeWidth = width || 1000; // Scale to fit the view horizontally
+          const planeHeight = height || 1000;
+
+          imageGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+          imageMaterial = new THREE.MeshBasicMaterial({
+            map: texture,
+            transparent: true,
+          });
+          imageMesh = new THREE.Mesh(imageGeometry, imageMaterial);
+          imageMesh.position.set(0, 0, 0.2); // Position it as needed
+          scene.add(imageMesh);
+        });
+      };
+
+      loadBackgroundImage();
+      loadMaskImage();
+
+      controlPoints = [
+        new THREE.Vector2(-250, 250), // Top-Left corner control point
+        new THREE.Vector2(0, 250), // Top control point
+        new THREE.Vector2(250, 250), // Top-Right corner control point
+        new THREE.Vector2(250, -250), // Bottom-Right corner control point
+        new THREE.Vector2(0, -250), // Bottom control point
+        new THREE.Vector2(-250, -250), // Bottom-Left corner control point
+        new THREE.Vector2(0, 0), // Center control point
+        new THREE.Vector2(-250, 0), // Center Left control point
+        new THREE.Vector2(250, 0), // Center Right control point
+      ];
+
+
+
+      function createControlPointMeshes() {
+        // Create control point meshes
+        let controlPointGeometry = new THREE.CircleGeometry(10, 64);
+        let controlPointMaterial = new THREE.MeshBasicMaterial({
+          color: 0xff00ff,
+          side: THREE.DoubleSide,
+        });
+        controlPointMeshes = controlPoints.map((point, index) => {
+          let names = [
+            "top-left",
+            "top",
+            "top-right",
+            "bottom-right",
+            "bottom",
+            "bottom-left",
+            "center",
+            "center-left",
+            "center-right",
+          ];
+          let controlPointMesh = new THREE.Mesh(
+            controlPointGeometry,
+            controlPointMaterial
+          );
+          controlPointMesh.name = names[index];
+          controlPointMesh.position.set(point.x, point.y, 1);
+          scene.add(controlPointMesh);
+          return controlPointMesh;
+        });
+      }
+
+      function createCurveTop() {
+        curveTop = new THREE.QuadraticBezierCurve(
+          controlPoints[0],
+          controlPoints[1],
+          controlPoints[2]
+        );
+
+        curveTopPoints = curveTop.getPoints(1000);
+        return {
+          curveTop,
+          curveTopPoints,
+        };
+      }
+
+      function createCurveBottom() {
+        curveBottom = new THREE.QuadraticBezierCurve(
+          controlPoints[5],
+          controlPoints[4],
+          controlPoints[3]
+        );
+        curveBottomPoints = curveBottom.getPoints(1000);
+        return {
+          curveBottom,
+          curveBottomPoints,
+        };
+      }
+
+      function readyVerticesIndicesUvs() {
+        curveTopPoints.forEach((point, index) => {
+          // Top vertices (assuming z = 0 for simplicity)
+          vertices.push(point.x, point.y, 0);
+          let uv = index / (curveTopPoints.length - 1);
+          uvs.push(index / (curveTopPoints.length - 1), 1); // UV mapping
+
+          // Corresponding bottom vertices
+          const bottomPoint = curveBottomPoints[index];
+          vertices.push(bottomPoint.x, bottomPoint.y, 0);
+          uvs.push(index / (curveBottomPoints.length - 1), 0); // UV mapping
+        });
+
+        // Create indices for the triangles
+        for (let i = 0; i < curveTopPoints.length - 1; i++) {
+            // Two triangles per segment
+            const a = i * 2; // Top vertex index
+            const b = a + 1; // Bottom vertex index
+            const c = a + 2; // Next top vertex index
+            const d = b + 2; // Next bottom vertex index
+
+            // First triangle (a, b, d)
+            indices.push(a, b, d);
+            // Second triangle (a, d, c)
+            indices.push(a, d, c);
+        }
+      }
+
+
+
+      function initializeShaderGeometry() {
+        shaderGeometry = new THREE.BufferGeometry();
+        shaderGeometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+        shaderGeometry.setIndex(indices);
+        shaderGeometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      }
+
+      const vertexShader = `
+        varying vec2 vUv;
+        uniform vec3 u_controlPointLeft;  // Center-left control point
+        uniform vec3 u_controlPointRight; // Center-right control point
+        uniform float squeezeFactor;      // Controls the strength of the squeeze
+        uniform float distortionFactor;   // Controls the strength of the distortion
+        uniform bool u_distort;           // Uniform to control distortion
+        uniform vec3 u_controlPoint;      // Center control point
+        uniform vec3 u_centerPoint; // Center point
+
+        void main() {
+            vUv = uv;
+            vec3 pos = position;
+            // float delta = pos.x;
+            float delta = pos.x - u_centerPoint.x;
+            float y = pos.y;
+
+            if (delta > 0.0 && u_distort && u_controlPoint.x > u_centerPoint.x) {
+              vUv.x = vUv.x + distortionFactor * delta * (u_controlPoint.x * 30.0) * (-vUv.x + 1.0) * vUv.x * .00001;
+          }
+          // else if (delta < 0.0 && u_distort && u_controlPoint.x < u_centerPoint.x) {
+          //     vUv.x = vUv.x - distortionFactor * delta * (u_controlPoint.x * 50.0) * (-vUv.x + 1.0) * vUv.x * .00001;
+          // }
+
+          else if (delta < 0.0 && u_distort && u_controlPoint.x != u_centerPoint.x) {
+              vUv.x = vUv.x - distortionFactor * -delta * (u_controlPoint.x * 30.0) * (-vUv.x + 1.0) * vUv.x * .00001;
+          }
+
+          float leftDist = pos.x - u_controlPointLeft.x;
+          float rightDist = pos.x - u_controlPointRight.x;
+
+          float squeezeLeft = smoothstep(0.0, 1.0, -leftDist * .001) * squeezeFactor * (-u_controlPointLeft.x * 0.21);
+          float squeezeRight = smoothstep(0.0, 1.0, rightDist * .001) * squeezeFactor * (u_controlPointRight.x * 0.21);
+          // float squeezeLeft = smoothstep(0.0, 1.0, -leftDist * .001) * squeezeFactor;
+          // float squeezeRight = smoothstep(0.0, 1.0, rightDist * .001) * squeezeFactor;
+
+
+
+          // pos.x += (squeezeLeft - squeezeRight);
+          vUv.x -= (squeezeLeft - squeezeRight);
+          // pos.y = y - (squeezeLeft + squeezeRight) * 0.5;
+          // pos.y = y + (squeezeLeft - squeezeRight) * 0.9;
+
+          vUv.x = clamp(vUv.x, 0.0, 1.0);
+          vUv.y = clamp(vUv.y, 0.0, 1.0);
+
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+        }
+      `;
+
+      const fragmentShader = `
+          varying vec2 vUv;
+          uniform sampler2D u_texture;
+          uniform float u_opacity;
+          void main() {
+            //  vec4 color = texture2D(u_texture, vUv);
+              // gl_FragColor = texture2D(u_texture, vUv);
+
+              // vec4 textureColor = texture2D(u_texture, vUv);
+              // gl_FragColor = vec4(textureColor.rgb, textureColor.a * u_opacity); // Apply opacity
+
+              vec4 textureColor = texture2D(u_texture, vUv);
+              // Use the texture's alpha channel and multiply by u_opacity for final transparency level
+              gl_FragColor = vec4(textureColor.rgb, textureColor.a * u_opacity);
+          }
+      `;
+
+      const userData =  {
+        distortionFactor: -0.0555,
+        squeezeFactor: 0.5,
+        u_centerPoint: { x: 0, y: 0, z: 0 },
+        u_controlPoint: { x: 197.5, y: -3.9999999999999702, z: 0 },
+        u_controlPointLeft: { x: 0, y: 0, z: 0 },
+        u_controlPointRight: { x: 0, y: 0, z: 0 },
+        u_distort: true
+      }
+
+      shaderMaterial = new THREE.ShaderMaterial({
+          vertexShader,
+          fragmentShader,
+          uniforms: {
+            u_texture: { value: null },
+            u_controlPoint: { value: new THREE.Vector3(userData.u_controlPoint.x, userData.u_controlPoint.y, userData.u_controlPoint.z) },
+            u_distort: { value: userData.u_distort },
+            distortionFactor: { value: userData.distortionFactor },
+            u_controlPointLeft: { value: new THREE.Vector3(userData.u_controlPointLeft.x, userData.u_controlPointLeft.y, userData.u_controlPointLeft.z) },
+            u_controlPointRight: { value: new THREE.Vector3(userData.u_controlPointRight.x, userData.u_controlPointRight.y, userData.u_controlPointRight.z) },
+            squeezeFactor: { value: userData.squeezeFactor },
+            u_opacity: { value: 1.0 },
+            u_centerPoint: { value: new THREE.Vector3(userData.u_centerPoint.x, userData.u_centerPoint.y, userData.u_centerPoint.z) },
+          },
+          transparent: true,  // Enable transparency
+          depthWrite: false,  // Optional based on your needs, but useful for correct transparency handling
+      });
+
+      let TextureLoader = new THREE.TextureLoader();
+      TextureLoader.load(designImageSource, async function (texture) {
+        let width = camera.right - camera.left;
+          let height = camera.top - camera.bottom;
+          let aspect = width / height;
+
+          const planeWidth = width; // Scale to fit the view horizontally
+          const planeHeight = height;
+
+
+        updateDefaultControlPointsPositions(planeWidth, planeHeight);
+        createControlPointMeshes();
+        createCurveTop();
+        createCurveBottom();
+        readyVerticesIndicesUvs();
+        initializeShaderGeometry();
+
+        let distance = controlPoints[2].x - controlPoints[0].x;
+        controlPoints[6].setX(controlPoints[0].x + distance / 2);
+        previousPosition = controlPoints[6].x;
+        updateCurve();
+
+        shaderMaterial.uniforms.u_texture.value = texture;
+        shaderMaterial.uniforms.u_texture.value.wrapS = THREE.RepeatWrapping;
+        shaderMaterial.uniforms.u_texture.value.wrapT = THREE.RepeatWrapping;
+        shaderMaterial.uniforms.u_texture.value.needsUpdate = true;
+      });
+
+      function updateDefaultControlPointsPositions(planeWidth, planeHeight) {
+          let byTwoWidth = planeWidth / 3;
+          let byTwoHeight = planeHeight / 3;
+
+          controlPoints[0].set(-byTwoWidth, byTwoHeight);
+          controlPoints[1].set(0, byTwoHeight);
+          controlPoints[2].set(byTwoWidth, byTwoHeight);
+          controlPoints[3].set(byTwoWidth, -byTwoHeight);
+          controlPoints[4].set(0, -byTwoHeight);
+          controlPoints[5].set(-byTwoWidth, -byTwoHeight);
+          controlPoints[6].set(0, 0);
+          controlPoints[7].set(-byTwoWidth, 0);
+          controlPoints[8].set(byTwoWidth, 0);
+      }
+
+
+        shaderMaterial.clipping = true;
+        shaderMesh = new THREE.Mesh(shaderGeometry, shaderMaterial);
+        shaderMesh.position.z = .3;
+        scene.add(shaderMesh);
+
+        const borderMaterial = new THREE.LineBasicMaterial({ color: 0xff00ff });
+      const borderGeometry = new THREE.BufferGeometry().setFromPoints([...curveTopPoints, ...curveBottomPoints.reverse()]);
+      borderLine = new THREE.LineLoop(borderGeometry, borderMaterial);
+      borderLine.position.z = 1;
+      scene.add(borderLine);
+
+      const rayCaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+      let selectedMesh = null;
+
+      renderer.domElement.addEventListener('mousedown', onMouseDown, false);
+      renderer.domElement.addEventListener('mousemove', onMouseMove, false);
+      renderer.domElement.addEventListener('mouseup', () => {
+          selectedMesh = null;
+      }, false);
+
+      let intersects;
+
+      function onMouseDown(event) {
+          const rect = renderer.domElement.getBoundingClientRect();
+
+          mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+          mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+          rayCaster.setFromCamera(mouse, camera);
+          intersects = rayCaster.intersectObjects(controlPointMeshes, true);
+
+          if (intersects.length > 0) {
+              selectedMesh = intersects[0].object;
+          }
+      }
+
+      function onMouseMove(event) {
+          if (!selectedMesh) return;
+
+          const rect = renderer.domElement.getBoundingClientRect();
+          mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+          mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+          rayCaster.setFromCamera(mouse, camera);
+
+          const intersects = rayCaster.intersectObject(plane, true);
+
+          const point = intersects[0].point;
+          const index = controlPointMeshes.findIndex((mesh) => mesh === selectedMesh);
+
+
+          if (intersects.length > 0) {
+              if(selectedMesh.name !== 'center' && selectedMesh.name !== 'center-left' && selectedMesh.name !== 'center-right') {
+                const index = controlPointMeshes.findIndex(
+                  (mesh) => mesh === selectedMesh
+                );
+
+
+                let name = selectedMesh.name;
+
+                if (
+                  name === "top-left" ||
+                  name === "top-right" ||
+                  name === "bottom-left" ||
+                  name === "bottom-right"
+                ) {
+                  let xDistanceTop = (controlPoints[2].x + controlPoints[0].x) / 2;
+                  let xDistanceBottom = (controlPoints[3].x + controlPoints[5].x) / 2;
+
+                  controlPoints[1].setX(xDistanceTop);
+                  controlPointMeshes[1].position.setX(xDistanceTop);
+
+                  controlPoints[4].setX(xDistanceBottom);
+                  controlPointMeshes[4].position.setX(xDistanceBottom);
+
+                  if (name === "top-left") {
+                    controlPoints[5].setX(point.x);
+                  } else if (name === "top-right") {
+                    controlPoints[3].setX(point.x);
+                  } else if (name === "bottom-left") {
+                    controlPoints[0].setX(point.x);
+                  } else if (name === "bottom-right") {
+                    controlPoints[2].setX(point.x);
+                  }
+
+                  controlPointMeshes.forEach((mesh, index) => {
+                    mesh.position.setX(controlPoints[index].x);
+                  });
+
+
+                } else {
+                  if (name === "top") {
+                    controlPoints[4].setX(point.x);
+                    controlPointMeshes[4].position.setX(point.x);
+                  } else if (name === "bottom") {
+                    controlPoints[1].setX(point.x);
+                    controlPointMeshes[1].position.setX(point.x);
+                  }
+                }
+                controlPoints[index].set(point.x, point.y);
+                selectedMesh.position.set(point.x, point.y, 1);
+
+                let distance = controlPoints[2].x - controlPoints[0].x;
+                controlPoints[6].setX(controlPoints[0].x + distance / 2);
+                previousPosition = controlPoints[6].x;
+                updateCurve();
+              } else {
+                let name = selectedMesh.name;
+
+                  controlPoints[index].set(point.x, point.y, 1);
+                  selectedMesh.position.set(point.x, point.y, 1);
+                  updateControlPointPosition(point, name);
+              }
+
+
+
+          }
+      }
+
+      let uniforms = shaderMaterial.uniforms;
+
+      function updateControlPointPosition(newPosition, name) {
+        if(name === "center-left") {
+          shaderMaterial.uniforms.u_controlPointLeft.value.x = newPosition.x;
+          shaderMaterial.uniforms.u_controlPointLeft.value.y = newPosition.y;
+          shaderMaterial.uniforms.u_controlPointLeft.value.z = 0; // Assuming z is 0 for a 2D plane distortion
+          shaderMaterial.uniforms.u_distort.value = true;
+      } else if (name === "center-right") {
+          shaderMaterial.uniforms.u_controlPointRight.value.x = newPosition.x;
+          shaderMaterial.uniforms.u_controlPointRight.value.y = newPosition.y;
+          shaderMaterial.uniforms.u_controlPointRight.value.z = 0; // Assuming z is 0 for a 2D plane distortion
+          shaderMaterial.uniforms.u_distort.value = true;
+      } else {
+        shaderMaterial.uniforms.u_centerPoint.value.x = previousPosition;
+        shaderMaterial.uniforms.u_controlPoint.value.x = newPosition.x;
+        shaderMaterial.uniforms.u_controlPoint.value.y = newPosition.y;
+        shaderMaterial.uniforms.u_controlPoint.value.z = 0; // Assuming z is 0 for a 2D plane distortion
+        shaderMaterial.uniforms.u_distort.value = true;
+      }
+
+
+        shaderMaterial.uniforms.distortionFactor.value = -.0555;
+        shaderMaterial.uniforms.squeezeFactor.value = .5;
+        shaderMaterial.uniformsNeedUpdate = true; // This line ensures that the changes are picked up
+
+        console.log('shaderMaterial ----- ', shaderMaterial);
+        uniforms = shaderMaterial.uniforms;
+        console.log('uniforms --------- ', uniforms);
+
+        // getControlPointsCoordinates();
+      }
+
+
+      function updateCurve() {
+          curveTop.v0 = controlPoints[0];
+          curveTop.v1 = controlPoints[1];
+          curveTop.v2 = controlPoints[2];
+          curveBottom.v0 = controlPoints[5];
+          curveBottom.v1 = controlPoints[4];
+          curveBottom.v2 = controlPoints[3];
+          const curveTopPoints = curveTop.getPoints(1000);
+          const curveBottomPoints = curveBottom.getPoints(1000);
+          const vertices = [];
+          const uvs = [];
+          curveTopPoints.forEach((point, index) => {
+              vertices.push(point.x, point.y, 0);
+              uvs.push(index / (curveTopPoints.length - 1), 1);
+
+              const bottomPoint = curveBottomPoints[index];
+              vertices.push(bottomPoint.x, bottomPoint.y, 0);
+              uvs.push(index / (curveBottomPoints.length - 1), 0);
+          });
+
+          const indices = [];
+          for (let i = 0; i < curveTopPoints.length - 1; i++) {
+              const a = i * 2;
+              const b = a + 1;
+              const c = a + 2;
+              const d = b + 2;
+
+              indices.push(a, b, d);
+              indices.push(a, d, c);
+          }
+
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+          geometry.setIndex(indices);
+          geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+          shaderMesh.geometry.dispose();
+          shaderMesh.geometry = geometry;
+
+          // update the border
+          borderGeometry.setFromPoints([...curveTopPoints, ...curveBottomPoints.reverse()]);
+          borderLine.geometry.dispose();
+          borderLine.geometry = borderGeometry;
+
+          renderer.render(scene, camera);
+
+          console.log('curveTop :>> ', curveTop);
+          console.log('curveBottom :>> ', curveBottom);
+
+
+          // getControlPointsCoordinates();
+      }
+
+
+
+
+      const planeGeometry = new THREE.PlaneGeometry(700, 700);
+      const planeMaterial = new THREE.MeshBasicMaterial({ visible: false }); // Invisible
+      const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+      plane.position.z = 1; // Slightly above the shader mesh
+
+      // Add the plane to the scene
+      scene.add(plane);
+
+      camera.position.z = 5;
+
+      // Render the scene
+      function animate() {
+        requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+      }
+
+      animate();
+
+      let button = document.querySelector("button");
+      async function getImage() {
+        renderer.setSize(1000, 1000);
+
+        // remove everything except shader mesh
+        scene.children = [shaderMesh];
+
+        // render the scene
+        renderer.render(scene, camera);
+
+        let canvas = renderer.domElement;
+        let dataURL = canvas.toDataURL("image/png", 1.0);
+        let image = new Image();
+        image.src = dataURL;
+
+        // download the image
+        let link = document.createElement("a");
+        link.download = "image.png";
+        link.href = dataURL;
+        link.click();
+
+      }
+      button.addEventListener("click", getImage);
+    </script>
+  </body>
+</html>
